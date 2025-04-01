@@ -58,25 +58,46 @@ class CrawlerManager:
         Returns:
             List[Dict[str, Any]]: Extracted and scored stories
         """
+        if not urls:
+            return []
+        
         tasks = []
         for url in urls:
             for spider_cls in self.spiders:
-                spider = spider_cls(self.config)
-                task = asyncio.create_task(self._extract_story(spider, url))
-                tasks.append(task)
+                try:
+                    spider = spider_cls(self.config)
+                    task = asyncio.create_task(self._extract_story(spider, url))
+                    tasks.append(task)
+                except Exception as e:
+                    self.logger.error(f"Spider initialization error: {e}")
         
         # Wait for all tasks to complete
-        story_results = await asyncio.gather(*tasks)
+        try:
+            story_results = await asyncio.gather(*tasks, return_exceptions=True)
+        except Exception as e:
+            self.logger.error(f"Story discovery error: {e}")
+            return []
         
-        # Filter and score stories
-        scored_stories = [
+        # Filter valid stories and apply relevance scoring
+        valid_stories = [
             story for story in story_results 
-            if story and self.relevance_scorer.score_story(story) > 0.5
+            if not isinstance(story, Exception) and story
         ]
+        
+        # Score and sort stories
+        scored_stories = []
+        for story in valid_stories:
+            try:
+                score = self.relevance_scorer.score_story(story)
+                story['relevance_score'] = score
+                if score > 0.5:  # Only keep stories above relevance threshold
+                    scored_stories.append(story)
+            except Exception as e:
+                self.logger.error(f"Story scoring error: {e}")
         
         # Sort by relevance and truncate
         scored_stories.sort(
-            key=lambda s: self.relevance_scorer.score_story(s), 
+            key=lambda s: s.get('relevance_score', 0), 
             reverse=True
         )
         
