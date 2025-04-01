@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
 @dataclass
@@ -8,7 +8,7 @@ class ScraperConfig:
     Provides flexible, ethical scraping parameters.
     """
     # Allowed domains for scraping
-    allowed_domains: List[str] = None
+    allowed_domains: List[str] = field(default_factory=list)
 
     # Delay between requests to prevent server overload
     request_delay: float = 1.0
@@ -35,10 +35,10 @@ class ScraperConfig:
     # Logging configuration
     log_level: str = 'INFO'
 
-    def validate(self):
+    def __post_init__(self):
         """
-        Validate scraper configuration.
-        Ensures ethical and responsible scraping parameters.
+        Validate configuration parameters after initialization.
+        Ensures configuration meets ethical and technical requirements.
         """
         if not self.allowed_domains:
             raise ValueError("At least one allowed domain must be specified")
@@ -48,6 +48,9 @@ class ScraperConfig:
         
         if self.max_concurrent_requests < 1:
             raise ValueError("At least one concurrent request is required")
+        
+        if self.request_timeout <= 0:
+            raise ValueError("Request timeout must be positive")
 
 # Default configuration for general web scraping
 DEFAULT_SCRAPER_CONFIG = ScraperConfig(
