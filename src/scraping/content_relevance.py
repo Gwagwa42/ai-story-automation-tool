@@ -1,28 +1,22 @@
 from typing import Dict, List, Any
+from datetime import datetime, timedelta
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+import math
 
 @dataclass
 class RelevanceScorer:
     """
     Intelligent content relevance scoring system.
     
-    Evaluates story content across multiple dimensinos to determine
-    its potential value and interest level.
-    
-    Key Scoring Dimensions:
-    - Timeliness
-    - Content depth
-    - Language complexity
-    - Engagement potential
+    Evaluates story content across multiple dimensions.
     """
     
-    # Configurable scoring weights
-    timeliness_weight: float = 0.25
+    # Scoring dimension weights
+    timeliness_weight: float = 0.3
     depth_weight: float = 0.3
     complexity_weight: float = 0.2
-    engagement_weight: float = 0.25
+    engagement_weight: float = 0.2
     
     # Thresholds and configuration
     min_word_count: int = 250
@@ -40,13 +34,14 @@ class RelevanceScorer:
         Calculate a comprehensive relevance score for a story.
         
         Args:
-            story (Dict[str, Any]): Extracted story metadata
+            story (Dict[str, Any]): Story metadata
         
         Returns:
             float: Overall relevance score (0-1)
         """
-        # Validate story content
-        if not self._validate_story(story):
+        # Validate basic story requirements
+        word_count = len(story.get('text', '').split())
+        if word_count < self.min_word_count:
             return 0.0
         
         # Calculate individual dimension scores
@@ -63,24 +58,12 @@ class RelevanceScorer:
             engagement_score * self.engagement_weight
         )
         
-        return min(max(total_score, 0), 1)
-    
-    def _validate_story(self, story: Dict[str, Any]) -> bool:
-        """
-        Basic validation of story content.
-        
-        Args:
-            story (Dict[str, Any]): Story metadata
-        
-        Returns:
-            bool: Whether story meets minimum requirements
-        """
-        word_count = len(story.get('text', '').split())
-        return word_count >= self.min_word_count
+        # Normalize and bound the score
+        return max(0, min(total_score, 1))
     
     def _calculate_timeliness(self, story: Dict[str, Any]) -> float:
         """
-        Calculate story timeliness score.
+        Calculate story timeliness score based on publication date.
         
         Args:
             story (Dict[str, Any]): Story metadata
@@ -94,20 +77,21 @@ class RelevanceScorer:
         
         try:
             publication_date = datetime.fromisoformat(published_at)
-            age = (datetime.now() - publication_date).days
+            age_days = (datetime.now() - publication_date).days
             
             # Exponential decay of relevance
-            if age > self.max_age_days:
+            if age_days > self.max_age_days:
                 return 0.0
             
-            return 1 - (age / self.max_age_days)
+            # Use sigmoid-like curve for more nuanced scoring
+            return 1 / (1 + math.exp(0.5 * (age_days - self.max_age_days/2)))
         
         except (TypeError, ValueError):
             return 0.5
     
     def _calculate_depth(self, story: Dict[str, Any]) -> float:
         """
-        Assess story depth based on word count and structure.
+        Assess story depth based on word count.
         
         Args:
             story (Dict[str, Any]): Story metadata
@@ -117,9 +101,9 @@ class RelevanceScorer:
         """
         word_count = len(story.get('text', '').split())
         
-        # Logarithmic scaling of depth
-        depth_score = min(1, (word_count / 2000))
-        return depth_score
+        # Logarithmic scaling with soft cap
+        depth_score = math.log(max(word_count, 1), 2000)
+        return max(0, min(depth_score, 1))
     
     def _calculate_complexity(self, story: Dict[str, Any]) -> float:
         """
@@ -132,17 +116,17 @@ class RelevanceScorer:
             float: Complexity score (0-1)
         """
         text = story.get('text', '')
-        
-        # Calculate average word length
         words = text.split()
+        
         if not words:
             return 0.0
         
+        # Calculate average word length
         avg_word_length = sum(len(word) for word in words) / len(words)
         
-        # Score based on word complexity
-        complexity_score = min(1, avg_word_length / 7)
-        return complexity_score
+        # More sophisticated complexity calculation
+        complexity_score = math.tanh(avg_word_length / 7)
+        return max(0, min(complexity_score, 1))
     
     def _calculate_engagement(self, story: Dict[str, Any]) -> float:
         """
@@ -162,5 +146,6 @@ class RelevanceScorer:
             if keyword in text
         )
         
-        # Normalized engagement score
-        return min(keyword_matches / len(self.engagement_keywords), 1)
+        # Normalize engagement score
+        max_keywords = len(self.engagement_keywords)
+        return min(keyword_matches / max_keywords, 1)
