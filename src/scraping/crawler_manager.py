@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import List, Dict, Any, Type
+from typing import List, Dict, Any, Type, Callable
 
 from .config import ScraperConfig, DEFAULT_SCRAPER_CONFIG
 from .content_relevance import RelevanceScorer
@@ -11,12 +11,6 @@ from .spiders.substack_spider import SubstackSpider
 class CrawlerManager:
     """
     Centralized management system for coordinating web content discovery.
-    
-    Responsibilities:
-    - Manage multiple content spiders
-    - Coordinate parallel story extraction
-    - Apply content relevance filtering
-    - Provide a unified interface for story discovery
     """
     
     def __init__(
@@ -27,20 +21,15 @@ class CrawlerManager:
     ):
         """
         Initialize the crawler manager with optional configuration.
-        
-        Args:
-            config (ScraperConfig): Global scraping configuration
-            relevance_scorer (RelevanceScorer): Custom relevance scoring system
-            logger (logging.Logger): Custom logger instance
         """
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
         self.relevance_scorer = relevance_scorer or RelevanceScorer()
         
         # Define available content spiders
-        self.spiders: List[Type[BaseContentSpider]] = [
-            MediumSpider,
-            SubstackSpider
+        self.spiders: List[Callable[[ScraperConfig], BaseContentSpider]] = [
+            lambda cfg: MediumSpider(cfg),
+            lambda cfg: SubstackSpider(cfg)
         ]
     
     async def discover_stories(
@@ -50,58 +39,49 @@ class CrawlerManager:
     ) -> List[Dict[str, Any]]:
         """
         Discover and extract stories from multiple URLs.
-        
-        Args:
-            urls (List[str]): List of URLs to explore
-            max_stories (int): Maximum number of stories to return
-        
-        Returns:
-            List[Dict[str, Any]]: Extracted and scored stories
         """
         if not urls:
             return []
         
         tasks = []
         for url in urls:
-            for spider_cls in self.spiders:
+            for spider_factory in self.spiders:
                 try:
-                    spider = spider_cls(self.config)
+                    spider = spider_factory(self.config)
                     task = asyncio.create_task(self._extract_story(spider, url))
                     tasks.append(task)
                 except Exception as e:
                     self.logger.error(f"Spider initialization error: {e}")
         
-        # Wait for all tasks to complete
-        try:
-            story_results = await asyncio.gather(*tasks, return_exceptions=True)
-        except Exception as e:
-            self.logger.error(f"Story discovery error: {e}")
-            return []
+        # Wait for all tasks to complete with error handling
+        story_results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Filter valid stories and apply relevance scoring
-        valid_stories = [
-            story for story in story_results 
-            if not isinstance(story, Exception) and story
-        ]
-        
-        # Score and sort stories
-        scored_stories = []
-        for story in valid_stories:
+        # Filter and score valid stories
+        valid_stories = []
+        for result in story_results:
+            if isinstance(result, Exception):
+                self.logger.error(f"Story extraction error: {result}")
+                continue
+            
+            if not result:
+                continue
+            
             try:
-                score = self.relevance_scorer.score_story(story)
-                story['relevance_score'] = score
-                if score > 0.5:  # Only keep stories above relevance threshold
-                    scored_stories.append(story)
+                score = self.relevance_scorer.score_story(result)
+                result['relevance_score'] = score
+                
+                if score > 0.5:  # Relevance threshold
+                    valid_stories.append(result)
             except Exception as e:
                 self.logger.error(f"Story scoring error: {e}")
         
-        # Sort by relevance and truncate
-        scored_stories.sort(
+        # Sort by relevance and limit
+        valid_stories.sort(
             key=lambda s: s.get('relevance_score', 0), 
             reverse=True
         )
         
-        return scored_stories[:max_stories]
+        return valid_stories[:max_stories]
     
     async def _extract_story(
         self, 
@@ -110,13 +90,6 @@ class CrawlerManager:
     ) -> Dict[str, Any]:
         """
         Extract a single story using a specific spider.
-        
-        Args:
-            spider (BaseContentSpider): Spider to use for extraction
-            url (str): URL to extract story from
-        
-        Returns:
-            Dict[str, Any]: Extracted story or empty dict
         """
         try:
             # Fetch raw content
@@ -125,6 +98,7 @@ class CrawlerManager:
             # Extract structured story
             if content:
                 story = spider.extract_story(content)
+                story['url'] = url  # Ensure URL is preserved
                 return story
         
         except Exception as e:
@@ -135,10 +109,8 @@ class CrawlerManager:
     def add_spider(self, spider_cls: Type[BaseContentSpider]):
         """
         Dynamically add a new spider to the discovery system.
-        
-        Args:
-            spider_cls (Type[BaseContentSpider]): Spider class to add
         """
-        if spider_cls not in self.spiders:
-            self.spiders.append(spider_cls)
+        spider_factory = lambda cfg: spider_cls(cfg)
+        if spider_factory not in self.spiders:
+            self.spiders.append(spider_factory)
             self.logger.info(f"Added spider: {spider_cls.__name__}")
