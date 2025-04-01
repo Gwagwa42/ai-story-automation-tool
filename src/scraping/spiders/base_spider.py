@@ -37,11 +37,14 @@ class BaseContentSpider(ABC):
         Validate spider configuration before scraping.
         Ensures ethical and safe scraping parameters.
         """
-        try:
-            self.config.validate()
-        except ValueError as e:
-            self.logger.error(f"Invalid scraper configuration: {e}")
-            raise
+        if not self.config.allowed_domains:
+            raise ValueError("At least one allowed domain must be specified")
+        
+        if self.config.request_delay < 0:
+            raise ValueError("Request delay must be non-negative")
+        
+        if self.config.max_concurrent_requests < 1:
+            raise ValueError("At least one concurrent request is required")
     
     def _get_request_headers(self) -> Dict[str, str]:
         """
