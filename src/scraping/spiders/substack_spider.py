@@ -2,6 +2,7 @@ from typing import Dict, Any
 from bs4 import BeautifulSoup
 from datetime import datetime
 import re
+import math
 
 from .base_spider import BaseContentSpider
 from ..config import ScraperConfig
@@ -12,11 +13,6 @@ class SubstackSpider(BaseContentSpider):
     
     This spider is designed to handle the unique content structure of Substack,
     which often features long-form written content with distinct formatting.
-    
-    Key Considerations:
-    - Handles both free and paid content sections
-    - Extracts metadata like publication date and author
-    - Preserves content formatting nuances
     """
     
     def __init__(
@@ -47,8 +43,8 @@ class SubstackSpider(BaseContentSpider):
         # Remove excessive whitespace
         text = re.sub(r'\s+', ' ', text).strip()
         
-        # Remove HTML entities
-        text = re.sub(r'&[a-zA-Z]+;', ' ', text)
+        # Remove HTML entities systematically
+        text = re.sub(r'&[a-zA-Z]+;', '', text).strip()
         
         return text
     
@@ -68,19 +64,19 @@ class SubstackSpider(BaseContentSpider):
         try:
             soup = BeautifulSoup(content['content'], 'html.parser')
             
-            # Extract title
-            title = soup.find('h1', class_='post-title')
+            # Extract article title
+            title = soup.find('h1', {'class': 'post-title'})
             title = title.text.strip() if title else 'Untitled'
             
-            # Extract full article body
-            article_body = soup.find('div', class_=['body', 'markup'])
+            # Extract article body with multiple selector strategies
+            article_body = (
+                soup.find('div', {'class': ['body', 'markup', 'post-body']}) or
+                soup.find('article') or
+                soup.find('body')
+            )
             
-            if not article_body:
-                # Fallback to more generic selection
-                article_body = soup.find('article')
-            
-            # Extract paragraphs
-            paragraphs = article_body.find_all(['p', 'div'], class_=['paragraph', 'block'])
+            # Extract paragraphs with multiple strategies
+            paragraphs = article_body.find_all(['p', 'div'], class_=['paragraph', 'block', 'content'])
             
             # Combine paragraphs into story text
             story_text = ' '.join(
@@ -93,25 +89,22 @@ class SubstackSpider(BaseContentSpider):
             author = soup.find('meta', {'name': 'author'})
             published_time = soup.find('time')
             
-            # Parse publication date
-            publication_date = None
-            if published_time and published_time.get('datetime'):
-                try:
-                    publication_date = datetime.fromisoformat(
-                        published_time['datetime']
-                    ).isoformat()
-                except ValueError:
-                    self.logger.warning(f"Could not parse date: {published_time['datetime']}")
+            # Calculate reading time
+            word_count = len(story_text.split())
+            reading_time = max(1, math.ceil(word_count / 250))
             
             return {
                 'url': content.get('url', ''),
                 'title': title,
                 'text': story_text,
                 'author': author['content'] if author else 'Unknown Author',
-                'published_at': publication_date,
+                'published_at': (
+                    published_time['datetime'] if published_time and published_time.get('datetime')
+                    else datetime.now().isoformat()
+                ),
                 'platform': 'Substack',
-                'word_count': len(story_text.split()),
-                'reading_time_minutes': max(1, len(story_text.split()) // 250)
+                'word_count': word_count,
+                'reading_time_minutes': reading_time
             }
         
         except Exception as e:
